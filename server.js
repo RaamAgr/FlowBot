@@ -1,55 +1,89 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
 
-import fs from 'fs/promises';
+// Load environment variables
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_FILE = path.join(__dirname, 'flows.json');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Middleware for parsing JSON
-app.use(express.json());
-
-// Serve static files from the Vite build directory
+// Middleware
+app.use(express.json({ limit: '10mb' })); // Allow larger payloads for complex flows
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// API: Save a flow
+// MongoDB Connection
+const MONGODB_URI = process.env.MONGODB_URI;
+
+mongoose.connect(MONGODB_URI)
+  .then(() => console.log('Connected to MongoDB Atlas'))
+  .catch(err => console.error('MongoDB connection error:', err));
+
+// Define Flow Schema
+const flowSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  nodes: { type: Array, required: true },
+  edges: { type: Array, required: true },
+  savedAt: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+const Flow = mongoose.model('Flow', flowSchema);
+
+// API: Save a flow (Update existing or Create new)
 app.post('/api/save-flow', async (req, res) => {
   try {
-    const flow = req.body;
-    // For now, we just save to a local file. 
-    // In production with Render + MongoDB, you'd replace this with a DB call.
-    await fs.writeFile(DATA_FILE, JSON.stringify(flow, null, 2));
-    res.json({ success: true, message: 'Flow saved successfully' });
+    const { name, nodes, edges } = req.body;
+    
+    // For now, we'll just keep updating the same "Main" flow or create one if none exists
+    // Later you can add multiple flow support by passing an ID
+    let flow = await Flow.findOne({ name });
+    
+    if (flow) {
+      flow.nodes = nodes;
+      flow.edges = edges;
+      flow.savedAt = new Date();
+      await flow.save();
+    } else {
+      flow = new Flow({ name, nodes, edges });
+      await flow.save();
+    }
+    
+    res.json({ success: true, message: 'Flow saved to Cloud DB' });
   } catch (error) {
     console.error('Save error:', error);
-    res.status(500).json({ success: false, message: 'Failed to save flow' });
+    res.status(500).json({ success: false, message: 'Database error while saving' });
   }
 });
 
-// API: Load the flow
+// API: Load a flow
 app.get('/api/load-flow', async (req, res) => {
   try {
-    const data = await fs.readFile(DATA_FILE, 'utf-8');
-    res.json(JSON.parse(data));
-  } catch (error) {
-    if (error.code === 'ENOENT') {
+    const { name } = req.query;
+    const flow = name 
+      ? await Flow.findOne({ name }) 
+      : await Flow.findOne().sort({ updatedAt: -1 }); // Get the most recently updated flow
+    
+    if (!flow) {
       return res.status(404).json({ message: 'No saved flow found' });
     }
-    res.status(500).json({ message: 'Error loading flow' });
+    res.json(flow);
+  } catch (error) {
+    console.error('Load error:', error);
+    res.status(500).json({ message: 'Database error while loading' });
   }
 });
 
-// Placeholder for future database health check
+// Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'FlowBot Backend is live' });
+  res.json({ status: 'ok', db: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' });
 });
 
-// Handle React routing, return all requests to React app
+// Serve React SPA
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
