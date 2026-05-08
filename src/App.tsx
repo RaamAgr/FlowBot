@@ -172,27 +172,47 @@ export default function App() {
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const flow = { name: flowName, nodes, edges, savedAt: new Date().toISOString() };
-    localStorage.setItem('flowbot-autosave', JSON.stringify(flow));
-    showToast('Flow saved to local storage', 'success');
+    
+    try {
+      const response = await fetch('/api/save-flow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(flow),
+      });
+
+      if (response.ok) {
+        showToast('Flow saved to server', 'success');
+      } else {
+        throw new Error('Save failed');
+      }
+    } catch (error) {
+      console.error('Save error:', error);
+      showToast('Failed to save to server', 'error');
+    }
   };
 
-  const handleLoad = () => {
-    const saved = localStorage.getItem('flowbot-autosave');
-    if (!saved) {
-      showToast('No saved flow found', 'error');
-      return;
-    }
-
+  const handleLoad = async () => {
     try {
-      const flow = JSON.parse(saved);
+      const response = await fetch('/api/load-flow');
+      if (!response.ok) {
+        if (response.status === 404) {
+          showToast('No saved flow found on server', 'error');
+        } else {
+          throw new Error('Load failed');
+        }
+        return;
+      }
+
+      const flow = await response.json();
       useFlowStore.setState({ nodes: flow.nodes || [], edges: flow.edges || [] });
       setFlowName(flow.name || 'Untitled Flow');
       setSelectedNode(null);
-      showToast('Flow loaded', 'success');
-    } catch {
-      showToast('Could not load saved flow', 'error');
+      showToast('Flow loaded from server', 'success');
+    } catch (error) {
+      console.error('Load error:', error);
+      showToast('Could not load flow from server', 'error');
     }
   };
 
